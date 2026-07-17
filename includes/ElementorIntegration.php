@@ -132,6 +132,62 @@ class ElementorIntegration {
             $this->block_spam( $ajax_handler, $form_id, 'Zu schnell ausgefüllt (< 3s)', '' );
             return;
         }
+
+        // 3. Kombinierte Text-Validierung (Single Pass)
+        $blacklist = [
+            'seo optimization', 'crypto', 'bitcoin', 'viagra', 'enlargement',
+            'hack your', 'million dollars', 'make money online', 'guest post'
+        ];
+        $blacklist = apply_filters( 'smrt_shield_blacklist', $blacklist );
+
+        // Regex for forbidden charsets: Cyrillic, Arabic, Han (Chinese/Japanese/Korean CJK)
+        $forbidden_regex = '/\p{Cyrillic}|\p{Arabic}|\p{Han}/u';
+        
+        $total_urls = 0;
+        $home_url   = home_url();
+        
+        // Elementor stores processed fields in the $record object
+        $fields = $record->get( 'fields' );
+
+        if ( ! empty( $fields ) && is_array( $fields ) ) {
+            foreach ( $fields as $field_id => $field ) {
+                $value = isset( $field['value'] ) ? $field['value'] : '';
+                
+                if ( ! is_string( $value ) || empty( $value ) ) {
+                    continue;
+                }
+
+                // b) Zeichensatz-Check (Fremdsprachen-Filter)
+                if ( preg_match( $forbidden_regex, $value ) ) {
+                    $this->block_spam( $ajax_handler, $form_id, 'Nicht-lateinischer Zeichensatz erkannt', $value );
+                    return;
+                }
+
+                // c) Blacklist-Check
+                foreach ( $blacklist as $keyword ) {
+                    if ( stripos( $value, $keyword ) !== false ) {
+                        $this->block_spam( $ajax_handler, $form_id, 'Blacklist-Keyword: ' . esc_html( $keyword ) . ' gefunden', $value );
+                        return;
+                    }
+                }
+
+                // a) URL-Check
+                // Entferne die eigene home_url() temporär aus dem Wert
+                $text_without_home = str_ireplace( $home_url, '', $value );
+                
+                // Zähle verbliebene (externe) URLs im Text (simpler Regex für http/https oder www.)
+                $url_pattern = '/\b(?:https?:\/\/|www\.)[-a-z0-9+&@#\/%?=~_|!:,.;]*[-a-z0-9+&@#\/%=~_|]/i';
+                if ( preg_match_all( $url_pattern, $text_without_home, $matches ) ) {
+                    $total_urls += count( $matches[0] );
+                }
+            }
+        }
+
+        // Wenn im gesamten Formular mehr als 1 externe URL vorkommt -> blockieren
+        if ( $total_urls > 1 ) {
+            $this->block_spam( $ajax_handler, $form_id, 'Zu viele externe Links (> 1)', '' );
+            return;
+        }
     }
 
     /**
