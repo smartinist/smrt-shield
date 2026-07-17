@@ -172,10 +172,14 @@ class ElementorIntegration {
                 }
 
                 // a) URL-Check
-                // Entferne die eigene home_url() temporär aus dem Wert
+                // Entferne die eigene home_url() und die aktuelle Seiten-URL temporär aus dem Wert
+                $current_page_url  = wp_get_referer(); // Die Seite, auf der das Formular eingebettet ist
                 $text_without_home = str_ireplace( $home_url, '', $value );
-                
-                // Zähle verbliebene (externe) URLs im Text (simpler Regex für http/https oder www.)
+                if ( ! empty( $current_page_url ) ) {
+                    $text_without_home = str_ireplace( $current_page_url, '', $text_without_home );
+                }
+
+                // Zähle verbliebene (externe) URLs im Text
                 $url_pattern = '/\b(?:https?:\/\/|www\.)[-a-z0-9+&@#\/%?=~_|!:,.;]*[-a-z0-9+&@#\/%=~_|]/i';
                 if ( preg_match_all( $url_pattern, $text_without_home, $matches ) ) {
                     $total_urls += count( $matches[0] );
@@ -183,9 +187,9 @@ class ElementorIntegration {
             }
         }
 
-        // Wenn im gesamten Formular mehr als 1 externe URL vorkommt -> blockieren
-        if ( $total_urls > 1 ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Zu viele externe Links (> 1)', '' );
+        // Wenn irgendeine externe URL vorkommt -> blockieren
+        if ( $total_urls > 0 ) {
+            $this->block_spam( $ajax_handler, $form_id, 'Externe URL im Formular gefunden', '' );
             return;
         }
     }
