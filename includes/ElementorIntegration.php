@@ -140,8 +140,10 @@ class ElementorIntegration {
         ];
         $blacklist = apply_filters( 'smrt_shield_blacklist', $blacklist );
 
-        // Regex for forbidden charsets: Cyrillic, Arabic, Han (Chinese/Japanese/Korean CJK)
-        $forbidden_regex = '/\p{Cyrillic}|\p{Arabic}|\p{Han}/u';
+        // Regex für verbotene Zeichensätze: Whitelist-Ansatz – blockiere alles,
+        // was NICHT lateinisch, gemeinsam (Zahlen, Satzzeichen) oder geerbt ist.
+        // Erfasst Bengali, Devanagari, Kyrillisch, Arabisch, Han, Hebräisch, Thai usw. in einem Schritt.
+        $forbidden_regex = '/[^\p{Latin}\p{Common}\p{Inherited}]/u';
         
         $total_urls = 0;
         $home_url   = home_url();
