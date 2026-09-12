@@ -1,0 +1,44 @@
+name: Publish plugin release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify version and build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="${GITHUB_REF_NAME#v}"
+          plugin_version="$(sed -n 's/^ \* Version: //p' smrt-shield.php | head -n 1)"
+
+          if [[ "${release_version}" != "${plugin_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match plugin version ${plugin_version}."
+            exit 1
+          fi
+
+          mkdir -p build/smrt-shield/includes
+          cp smrt-shield.php build/smrt-shield/
+          cp includes/*.php build/smrt-shield/includes/
+          cp -R assets build/smrt-shield/
+          (
+            cd build
+            zip -r ../smrt-shield.zip smrt-shield
+          )
+          sha256sum smrt-shield.zip > SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" smrt-shield.zip SHA256SUMS --verify-tag --generate-notes

@@ -12,6 +12,7 @@ class Activator {
      */
     public static function activate() {
         self::create_logs_table();
+        update_option( 'smrt_shield_version', SMRT_SHIELD_VERSION );
     }
 
     /**

@@ -2,9 +2,12 @@
 /**
  * Plugin Name: Smrt-Shield
  * Description: Unsichtbarer, hochgradig effektiver Spam-Schutz für Elementor Pro Formulare.
- * Version: 1.0.0
+ * Version: 2.1.1
  * Author: SMARTini
  * Text Domain: smrt-shield
+ * Update URI: https://github.com/smartinist/smrt-shield
+ * Requires at least: 5.8
+ * Requires PHP: 7.4
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -12,9 +15,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'SMRT_SHIELD_VERSION', '1.0.0' );
+define( 'SMRT_SHIELD_VERSION', '2.1.1' );
 define( 'SMRT_SHIELD_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SMRT_SHIELD_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+define( 'SMRT_SHIELD_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
 // Autoloader for the SmrtShield namespace
 spl_autoload_register( function ( $class_name ) {
@@ -42,6 +46,9 @@ register_activation_hook( __FILE__, function() {
  * Initialize the plugin
  */
 add_action( 'plugins_loaded', function() {
+    // Register the GitHub release updater independently from Elementor.
+    \SmrtShield\Updater::get_instance();
+
     // Wait for Elementor to initialize before hooking into it.
     add_action( 'elementor/init', function() {
         \SmrtShield\ElementorIntegration::get_instance();
