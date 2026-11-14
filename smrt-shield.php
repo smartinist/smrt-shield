@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Smrt-Shield
  * Description: Unsichtbarer, hochgradig effektiver Spam-Schutz für Elementor Pro Formulare.
- * Version: 2.1.1
+ * Version: 2.2.0
  * Author: SMARTini
  * Text Domain: smrt-shield
  * Update URI: https://github.com/smartinist/smrt-shield
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'SMRT_SHIELD_VERSION', '2.1.1' );
+define( 'SMRT_SHIELD_VERSION', '2.2.0' );
 define( 'SMRT_SHIELD_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SMRT_SHIELD_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'SMRT_SHIELD_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );

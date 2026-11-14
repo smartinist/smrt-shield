@@ -2,7 +2,7 @@
 
 ## Was ist smrt-shield?
 
-Ein **WordPress-Plugin** für **Elementor Pro Formulare**, das mehrschichtigen, DSGVO-konformen Spam-Schutz ohne externe Prüfdienste bietet. Ein kleines lokales Frontend-Skript erneuert dynamische Aufgaben; die Prüfung bleibt vollständig auf der eigenen WordPress-Installation. Autor: **SMARTini**. Version: **2.1.1**.
+Ein **WordPress-Plugin** für **Elementor Pro Formulare**, das mehrschichtigen Spam-Schutz ohne externe Prüfdienste bietet. Ein kleines lokales Frontend-Skript erneuert dynamische Aufgaben; die Prüfung bleibt vollständig auf der eigenen WordPress-Installation. Autor: **SMARTini**. Version: **2.2.0**.
 
 ---
 
@@ -121,6 +121,24 @@ $blacklist = apply_filters('smrt_shield_blacklist', [
 - Schwellenwert: `> 0` externe URLs → blockieren
 
 **Bei Spam:** Generische Fehlermeldung: *„Ein Fehler ist aufgetreten. Bitte laden Sie die Seite neu..."* – keine spezifischen Infos für Bots.
+
+---
+
+## Atomic Forms (ab Smrt-Shield 2.2)
+
+Classic Forms behalten ihre bestehenden Formularoptionen. Auf Installationen
+mit Elementor und Elementor Pro ab 4.4 schützt dasselbe Plugin zusätzlich
+Atomic Forms, auch in wiederverwendbaren Elementor-Komponenten.
+
+- Die Rechenaufgabe ist in Atomic Forms standardmäßig aktiv. Im Atomic-Editor
+  unter **Smrt-Shield → Rechenaufgabe deaktivieren** lässt sie sich pro Formular
+  abschalten; die übrigen Prüfungen bleiben aktiv.
+- `AtomicFormIntegration.php` bindet die gemeinsamen Schutzregeln an Atomic
+  Forms an. `elementor/atomic-form/before-submit` überträgt die Prüfdaten
+  getrennt von den Nutzfeldern; `elementor_pro/atomic_forms/spam_check`
+  entscheidet vor den konfigurierten Formularaktionen.
+- Bei einem Mischbetrieb entscheidet der Formulartyp, welche Anbindung greift.
+  Ältere Elementor-Versionen verwenden weiterhin die Classic-Anbindung.
 
 ---
 

@@ -2,13 +2,13 @@
     'use strict';
 
     const refreshed = new WeakSet();
-    let forcedScanTimer = null;
+    const popupTimers = new WeakMap();
 
-    function scheduleForcedScan( delay ) {
-        window.clearTimeout( forcedScanTimer );
-        forcedScanTimer = window.setTimeout( function () {
-            scan( document, true );
-        }, delay || 150 );
+    function schedulePopupScan( popup, delay ) {
+        window.clearTimeout( popupTimers.get( popup ) );
+        popupTimers.set( popup, window.setTimeout( function () {
+            scan( popup, true );
+        }, delay ) );
     }
 
     function setResetSafeValue( field, value ) {
@@ -72,6 +72,11 @@
                 return response.json();
             } )
             .then( function ( challenge ) {
+                // An Atomic submission can be underway when a refresh arrives.
+                if ( ( container.hasAttribute( 'data-smrt-shield-atomic' ) && form.dataset.atomicFormSubmitting )
+                    || ( answer && answer.value !== '' && force !== 'retry' ) ) {
+                    return;
+                }
                 if ( ! challenge.timestamp || ! challenge.timestampHash || ! challenge.timestampProof ) {
                     return;
                 }
@@ -98,6 +103,39 @@
                 // Keep the valid server-rendered, reset-resistant fallback.
             } );
     }
+
+    // Atomic Forms 4.4 serialize only their own inputs. Send proof as separate
+    // request parameters so it never becomes part of Elementor's submitted data.
+    document.addEventListener( 'elementor/atomic-form/before-submit', function ( event ) {
+        const form = event.target;
+        const container = form.querySelector( '[data-smrt-shield-atomic]' );
+        if ( ! container || typeof event.detail?.addFields !== 'function' ) {
+            return;
+        }
+
+        const proof = {};
+        form.querySelectorAll( '[data-smrt-shield-form] input, [data-smrt-shield-math] input' ).forEach( function ( input ) {
+            if ( input.name ) {
+                proof[ input.name ] = input.value;
+            }
+        } );
+        event.detail.addFields( proof );
+    } );
+
+    // Each arithmetic proof is good for one attempt. Allow retry without
+    // clearing the other fields, including after a failed challenge.
+    new MutationObserver( function ( mutations ) {
+        mutations.forEach( function ( mutation ) {
+            const form = mutation.target;
+            if ( ! form.matches( 'form[data-e-type="e-form"]' ) || form.hasAttribute( 'data-atomic-form-submitting' ) ) {
+                return;
+            }
+            const container = form.querySelector( '[data-smrt-shield-atomic]' );
+            if ( container ) {
+                refreshForm( container, 'retry' );
+            }
+        } );
+    } ).observe( document.documentElement, { subtree: true, attributes: true, attributeFilter: [ 'data-atomic-form-submitting' ] } );
 
     function scan( root, force ) {
         if ( root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE ) {
@@ -130,8 +168,9 @@
                 );
             } );
 
-            if ( addsProtectedForm ) {
-                scheduleForcedScan();
+            const popup = mutation.target.closest?.( '.elementor-popup-modal' );
+            if ( addsProtectedForm && popup ) {
+                schedulePopupScan( popup, 150 );
             }
         } );
     } ).observe( document.documentElement, { childList: true, subtree: true } );
@@ -139,8 +178,11 @@
     // Elementor can reuse and reset an existing popup form. Refresh after its
     // popup lifecycle event so reset hidden fields are hydrated again.
     if ( window.jQuery ) {
-        window.jQuery( document ).on( 'elementor/popup/show', function () {
-            scheduleForcedScan( 750 );
+        window.jQuery( document ).on( 'elementor/popup/show', function ( event, id ) {
+            const popup = document.getElementById( 'elementor-popup-modal-' + id );
+            if ( popup ) {
+                schedulePopupScan( popup, 750 );
+            }
         } );
     }
 
@@ -150,7 +192,22 @@
         const trigger = event.target.closest ? event.target.closest( 'a[href*="popup%3Aopen"]' ) : null;
 
         if ( trigger ) {
-            scheduleForcedScan( 1000 );
+            const href = trigger.getAttribute( 'href' );
+            const match = href.match( /(?:%26|&)settings(?:%3D|=)([^&#]+)/i );
+            if ( ! match ) {
+                return;
+            }
+            try {
+                const settings = JSON.parse( window.atob( decodeURIComponent( match[ 1 ] ) ) );
+                window.setTimeout( function () {
+                    const popup = document.getElementById( 'elementor-popup-modal-' + settings.id );
+                    if ( popup ) {
+                        scan( popup, true );
+                    }
+                }, 1000 );
+            } catch ( error ) {
+                // Elementor's popup event still handles other link formats.
+            }
         }
     }, true );
 }() );

@@ -49,6 +49,12 @@ class ElementorIntegration {
         add_action( 'rest_api_init', [ $this, 'register_rest_routes' ] );
         add_filter( 'script_loader_tag', [ $this, 'mark_frontend_script_as_critical' ], 10, 3 );
 
+        if ( defined( 'ELEMENTOR_VERSION' ) && defined( 'ELEMENTOR_PRO_VERSION' )
+            && version_compare( ELEMENTOR_VERSION, '4.4.0', '>=' )
+            && version_compare( ELEMENTOR_PRO_VERSION, '4.4.0', '>=' ) ) {
+            new AtomicFormIntegration( $this );
+        }
+
         $this->maybe_clear_elementor_cache_after_update();
     }
 
@@ -176,13 +182,23 @@ class ElementorIntegration {
             return $content;
         }
 
-        $instance    = sanitize_key( $widget->get_id() );
+        $instance = sanitize_key( $widget->get_id() );
+        [ $hidden_html, $math_html ] = $this->render_protection( $instance, 'yes' === ( $settings[ self::MATH_DISABLE_SETTING ] ?? '' ) );
+
+        if ( '' !== $math_html ) {
+            $content = $this->inject_before_submit_button( $content, $math_html );
+        }
+
+        return str_replace( '</form>', $hidden_html . '</form>', $content );
+    }
+
+    public function render_protection( $instance, $math_disabled, $atomic = false ) {
         $timestamp   = (string) time();
         $hash        = wp_hash( $timestamp . '|' . $instance, 'nonce' );
         $honeypot_id = 'smrt-organization-url-' . $instance;
 
         // CSS to hide the fields from human users but keep them accessible for bots
-        $hidden_html = '<div style="position:absolute; left:-9999px; opacity:0; z-index:-1;" aria-hidden="true" data-smrt-shield-form data-challenge-url="' . esc_url( rest_url( 'smrt-shield/v1/challenge' ) ) . '" data-form-id="' . esc_attr( $instance ) . '">';
+        $hidden_html = '<div style="position:absolute; left:-9999px; opacity:0; z-index:-1;" aria-hidden="true" data-smrt-shield-form' . ( $atomic ? ' data-smrt-shield-atomic' : '' ) . ' data-challenge-url="' . esc_url( rest_url( 'smrt-shield/v1/challenge' ) ) . '" data-form-id="' . esc_attr( $instance ) . '">';
         
         // Honeypot Field - Named deceptively
         $hidden_html .= '<label for="' . esc_attr( $honeypot_id ) . '">' . esc_html__( 'Organization URL', 'smrt-shield' ) . '</label>';
@@ -195,19 +211,7 @@ class ElementorIntegration {
         
         $hidden_html .= '</div>';
 
-        $math_html = '';
-
-        // Missing settings belong to forms created before 2.0 and intentionally
-        // mean "enabled". Only an explicit opt-out disables the challenge.
-        if ( empty( $settings[ self::MATH_DISABLE_SETTING ] ) || 'yes' !== $settings[ self::MATH_DISABLE_SETTING ] ) {
-            $math_html = $this->render_math_challenge( $instance );
-        }
-
-        if ( '' !== $math_html ) {
-            $content = $this->inject_before_submit_button( $content, $math_html );
-        }
-
-        return str_replace( '</form>', $hidden_html . '</form>', $content );
+        return [ $hidden_html, $math_disabled ? '' : $this->render_math_challenge( $instance ) ];
     }
 
     /**
@@ -228,28 +232,36 @@ class ElementorIntegration {
         $form_id = ! empty( $form_name ) ? $form_name : $form_id_setting;
         $form_instance = sanitize_key( (string) $form_id_setting );
 
+        $fields = $record->get( 'fields' );
+        $values = is_array( $fields ) ? array_column( $fields, 'value' ) : null;
+        $failure = $this->check_submission( $form_instance, 'yes' === $record->get_form_settings( self::MATH_DISABLE_SETTING ), $values, $_POST );
+
+        if ( $failure ) {
+            $this->block_spam( $ajax_handler, $form_id, ...$failure );
+        }
+    }
+
+    public function check_submission( $form_instance, $math_disabled, $values, array $proof_fields ) {
         // 1. Reject unusually large or deeply populated form payloads before
         // applying more expensive content checks. File contents are not part
         // of Elementor's processed field values and are therefore unaffected.
-        if ( ! $this->is_submission_size_valid( $record ) ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Formularinhalt zu groß', '' );
-            return;
+        if ( ! $this->is_submission_size_valid( $values ) ) {
+            return [ 'Formularinhalt zu groß', '' ];
         }
 
         // 2. Honeypot Validation
-        $honeypot = $this->get_posted_string( 'smrt_organization_url' );
+        $honeypot = $this->get_posted_string( 'smrt_organization_url', $proof_fields );
 
         if ( ! empty( $honeypot ) ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Honeypot ausgelöst', $honeypot );
-            return;
+            return [ 'Honeypot ausgelöst', $honeypot ];
         }
 
         // 3. Timestamp Validation
-        $timestamp = $this->get_posted_string( 'smrt_timestamp' );
-        $hash      = $this->get_posted_string( 'smrt_timestamp_hash' );
+        $timestamp = $this->get_posted_string( 'smrt_timestamp', $proof_fields );
+        $hash      = $this->get_posted_string( 'smrt_timestamp_hash', $proof_fields );
 
         if ( '' === $timestamp || '' === $hash ) {
-            $proof = $this->get_posted_proof( self::TIME_PROOF_FIELD, 3 );
+            $proof = $this->get_posted_proof( self::TIME_PROOF_FIELD, 3, $proof_fields );
 
             if ( 3 === count( $proof ) ) {
                 [ $timestamp, $hash, $proof_form_id ] = $proof;
@@ -273,29 +285,23 @@ class ElementorIntegration {
             ! preg_match( '/^\d{10}$/', $timestamp ) ||
             ! hash_equals( wp_hash( $form_hash_input, 'nonce' ), $hash )
         ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Manipulierter/Fehlender Timestamp', '' );
-            return;
+            return [ 'Manipulierter/Fehlender Timestamp', '' ];
         }
 
         $time_diff = time() - (int) $timestamp;
 
         if ( $time_diff < self::MIN_FILL_SECONDS ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Zu schnell ausgefüllt (< 3s)', '' );
-            return;
+            return [ 'Zu schnell ausgefüllt (< 3s)', '' ];
         }
 
         if ( $time_diff > self::PROOF_LIFETIME ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Formular abgelaufen', '' );
-            return;
+            return [ 'Formular abgelaufen', '' ];
         }
 
         // 4. Rechenaufgabe. Existing forms have no stored setting, therefore
         // only an explicit opt-out disables this default-on protection.
-        $math_disabled = $record->get_form_settings( self::MATH_DISABLE_SETTING );
-
-        if ( 'yes' !== $math_disabled && ! $this->is_math_answer_valid( $form_instance ) ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Rechenaufgabe falsch beantwortet', '' );
-            return;
+        if ( ! $math_disabled && ! $this->is_math_answer_valid( $form_instance, $proof_fields ) ) {
+            return [ 'Rechenaufgabe falsch beantwortet', '' ];
         }
 
         // 5. Kombinierte Text-Validierung (Single Pass)
@@ -313,12 +319,8 @@ class ElementorIntegration {
         $total_urls = 0;
         $home_url   = home_url();
         
-        // Elementor stores processed fields in the $record object
-        $fields = $record->get( 'fields' );
-
-        if ( ! empty( $fields ) && is_array( $fields ) ) {
-            foreach ( $fields as $field_id => $field ) {
-                $value = isset( $field['value'] ) ? $field['value'] : '';
+        if ( ! empty( $values ) ) {
+            foreach ( $values as $value ) {
                 
                 if ( ! is_string( $value ) || empty( $value ) ) {
                     continue;
@@ -326,15 +328,13 @@ class ElementorIntegration {
 
                 // b) Zeichensatz-Check (Fremdsprachen-Filter)
                 if ( preg_match( $forbidden_regex, $value ) ) {
-                    $this->block_spam( $ajax_handler, $form_id, 'Nicht-lateinischer Zeichensatz erkannt', $value );
-                    return;
+                    return [ 'Nicht-lateinischer Zeichensatz erkannt', $value ];
                 }
 
                 // c) Blacklist-Check
                 foreach ( $blacklist as $keyword ) {
                     if ( stripos( $value, $keyword ) !== false ) {
-                        $this->block_spam( $ajax_handler, $form_id, 'Blacklist-Keyword: ' . esc_html( $keyword ) . ' gefunden', $value );
-                        return;
+                        return [ 'Blacklist-Keyword: ' . esc_html( $keyword ) . ' gefunden', $value ];
                     }
                 }
 
@@ -356,9 +356,10 @@ class ElementorIntegration {
 
         // Wenn irgendeine externe URL vorkommt -> blockieren
         if ( $total_urls > 0 ) {
-            $this->block_spam( $ajax_handler, $form_id, 'Externe URL im Formular gefunden', '' );
-            return;
+            return [ 'Externe URL im Formular gefunden', '' ];
         }
+
+        return null;
     }
 
     /**
@@ -465,13 +466,13 @@ class ElementorIntegration {
      * @param string $form_id Expected Elementor widget identifier.
      * @return bool
      */
-    private function is_math_answer_valid( $form_id ) {
-        $answer    = $this->get_posted_string( self::MATH_ANSWER_FIELD );
-        $token     = $this->get_posted_string( self::MATH_TOKEN_FIELD );
-        $signature = $this->get_posted_string( self::MATH_HASH_FIELD );
+    private function is_math_answer_valid( $form_id, array $proof_fields ) {
+        $answer    = $this->get_posted_string( self::MATH_ANSWER_FIELD, $proof_fields );
+        $token     = $this->get_posted_string( self::MATH_TOKEN_FIELD, $proof_fields );
+        $signature = $this->get_posted_string( self::MATH_HASH_FIELD, $proof_fields );
 
         if ( '' === $token || '' === $signature ) {
-            $proof = $this->get_posted_proof( self::MATH_PROOF_FIELD, 2 );
+            $proof = $this->get_posted_proof( self::MATH_PROOF_FIELD, 2, $proof_fields );
 
             if ( 2 === count( $proof ) ) {
                 [ $token, $signature ] = $proof;
@@ -542,22 +543,18 @@ class ElementorIntegration {
      * excludes uploaded file contents while still stopping oversized text and
      * pathological nested values.
      *
-     * @param \ElementorPro\Modules\Forms\Classes\Form_Record $record Form record.
+     * @param array|null $values Elementor form field values.
      * @return bool
      */
-    private function is_submission_size_valid( $record ) {
-        $fields = $record->get( 'fields' );
-
-        if ( ! is_array( $fields ) || count( $fields ) > self::MAX_FORM_FIELDS ) {
+    private function is_submission_size_valid( $values ) {
+        if ( ! is_array( $values ) || count( $values ) > self::MAX_FORM_FIELDS ) {
             return false;
         }
 
         $total_bytes = 0;
         $value_count = 0;
 
-        foreach ( $fields as $field ) {
-            $value = isset( $field['value'] ) ? $field['value'] : '';
-
+        foreach ( $values as $value ) {
             if ( ! $this->measure_submission_value( $value, $total_bytes, $value_count, 0 ) ) {
                 return false;
             }
@@ -607,12 +604,12 @@ class ElementorIntegration {
      * @param string $key POST field name.
      * @return string
      */
-    private function get_posted_string( $key ) {
-        if ( ! isset( $_POST[ $key ] ) || ! is_scalar( $_POST[ $key ] ) ) {
+    private function get_posted_string( $key, array $proof_fields ) {
+        if ( ! isset( $proof_fields[ $key ] ) || ! is_scalar( $proof_fields[ $key ] ) ) {
             return '';
         }
 
-        return sanitize_text_field( wp_unslash( (string) $_POST[ $key ] ) );
+        return sanitize_text_field( wp_unslash( (string) $proof_fields[ $key ] ) );
     }
 
     /**
@@ -636,12 +633,12 @@ class ElementorIntegration {
      * @param int    $expected_parts Exact number of encoded values.
      * @return array<int, string>
      */
-    private function get_posted_proof( $field, $expected_parts ) {
-        if ( ! isset( $_POST[ $field ] ) || ! is_array( $_POST[ $field ] ) || 1 !== count( $_POST[ $field ] ) ) {
+    private function get_posted_proof( $field, $expected_parts, array $proof_fields ) {
+        if ( ! isset( $proof_fields[ $field ] ) || ! is_array( $proof_fields[ $field ] ) || 1 !== count( $proof_fields[ $field ] ) ) {
             return [];
         }
 
-        $encoded = (string) array_key_first( $_POST[ $field ] );
+        $encoded = (string) array_key_first( $proof_fields[ $field ] );
 
         if ( ! preg_match( '/^[A-Za-z0-9_-]{1,1024}$/', $encoded ) ) {
             return [];
